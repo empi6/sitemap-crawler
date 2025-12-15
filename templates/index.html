@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sitemap Crawler</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            padding: 40px;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 500;
+        }
+        
+        input[type="url"] {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        
+        input[type="url"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .stop-btn {
+            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+            margin-left: 10px;
+        }
+        
+        .stop-btn:hover {
+            box-shadow: 0 5px 15px rgba(220, 53, 69, 0.4);
+        }
+        
+        .button-group {
+            display: flex;
+            align-items: center;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #667eea;
+            display: none;
+        }
+        
+        .error {
+            background: #fee;
+            color: #c33;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+            display: none;
+        }
+        
+        .results {
+            margin-top: 30px;
+        }
+        
+        .results-header {
+            margin-bottom: 15px;
+            color: #555;
+            font-size: 18px;
+        }
+        
+        .results-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        
+        .results-table th {
+            background: #f5f5f5;
+            padding: 12px;
+            text-align: left;
+            border-bottom: 2px solid #ddd;
+            color: #333;
+            font-weight: 600;
+        }
+        
+        .results-table td {
+            padding: 12px;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .results-table tr:hover {
+            background: #f9f9f9;
+        }
+        
+        .status-code {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        
+        .status-200 {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status-300 {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .status-400 {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .status-500 {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .status-error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .status-timeout {
+            background: #ffeaa7;
+            color: #856404;
+        }
+        
+        .status-cancelled {
+            background: #e2e3e5;
+            color: #383d41;
+        }
+        
+        .url-cell {
+            word-break: break-all;
+            max-width: 600px;
+        }
+        
+        .timeout-warning {
+            background: #fff3cd;
+            color: #856404;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Sitemap Crawler</h1>
+        
+        <form id="sitemapForm">
+            <div class="form-group">
+                <label for="sitemapUrl">Sitemap URL:</label>
+                <input 
+                    type="url" 
+                    id="sitemapUrl" 
+                    name="sitemapUrl" 
+                    placeholder="https://example.com/sitemap.xml" 
+                    required
+                >
+            </div>
+            <div class="button-group">
+                <button type="submit" id="submitBtn">Check Sitemap</button>
+                <button type="button" id="stopBtn" class="stop-btn" style="display: none;">Stop</button>
+            </div>
+        </form>
+        
+        <div class="loading" id="loading">
+            <p>Processing sitemap... Please wait.</p>
+            <p id="progressText" style="margin-top: 10px; font-size: 14px;"></p>
+        </div>
+        
+        <div class="error" id="error"></div>
+        
+        <div class="timeout-warning" id="timeoutWarning"></div>
+        
+        <div class="results" id="results" style="display: none;">
+            <div class="results-header" id="resultsHeader"></div>
+            <table class="results-table">
+                <thead>
+                    <tr>
+                        <th style="width: 60px;">#</th>
+                        <th>URL</th>
+                        <th>Status Code</th>
+                    </tr>
+                </thead>
+                <tbody id="resultsBody">
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <script>
+        let eventSource = null;
+        let currentRequestId = null;
+        let totalUrls = 0;
+        let urlCounter = 0;
+        
+        function addResultRow(url, status) {
+            const resultsBody = document.getElementById('resultsBody');
+            const row = document.createElement('tr');
+            
+            urlCounter++;
+            
+            const numberCell = document.createElement('td');
+            numberCell.textContent = urlCounter;
+            numberCell.style.textAlign = 'center';
+            numberCell.style.fontWeight = '500';
+            numberCell.style.color = '#666';
+            
+            const urlCell = document.createElement('td');
+            urlCell.className = 'url-cell';
+            urlCell.textContent = url;
+            
+            const statusCell = document.createElement('td');
+            const statusSpan = document.createElement('span');
+            statusSpan.className = 'status-code';
+            
+            if (status === 'ERROR') {
+                statusSpan.className += ' status-error';
+                statusSpan.textContent = 'ERROR';
+            } else if (status === 'TIMEOUT') {
+                statusSpan.className += ' status-timeout';
+                statusSpan.textContent = 'TIMEOUT';
+            } else if (status === 'CANCELLED') {
+                statusSpan.className += ' status-cancelled';
+                statusSpan.textContent = 'CANCELLED';
+            } else if (status >= 200 && status < 300) {
+                statusSpan.className += ' status-200';
+                statusSpan.textContent = status;
+            } else if (status >= 300 && status < 400) {
+                statusSpan.className += ' status-300';
+                statusSpan.textContent = status;
+            } else if (status >= 400 && status < 500) {
+                statusSpan.className += ' status-400';
+                statusSpan.textContent = status;
+            } else {
+                statusSpan.className += ' status-500';
+                statusSpan.textContent = status;
+            }
+            
+            statusCell.appendChild(statusSpan);
+            row.appendChild(numberCell);
+            row.appendChild(urlCell);
+            row.appendChild(statusCell);
+            resultsBody.appendChild(row);
+        }
+        
+        const stopBtn = document.getElementById('stopBtn');
+        stopBtn.addEventListener('click', () => {
+            if (eventSource) {
+                // Cancel the stream reader
+                if (eventSource.close) {
+                    eventSource.close();
+                }
+                
+                // Also cancel on server side
+                if (currentRequestId) {
+                    fetch('/cancel', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ request_id: currentRequestId })
+                    }).catch(() => {});
+                }
+                
+                handleStop();
+            }
+        });
+        
+        function handleStop() {
+            const submitBtn = document.getElementById('submitBtn');
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const progressText = document.getElementById('progressText');
+            
+            loading.style.display = 'none';
+            stopBtn.style.display = 'none';
+            submitBtn.disabled = false;
+            error.textContent = 'Process stopped by user.';
+            error.style.display = 'block';
+            progressText.textContent = '';
+            
+            eventSource = null;
+            currentRequestId = null;
+            totalUrls = 0;
+            urlCounter = 0;
+        }
+        
+        document.getElementById('sitemapForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const url = document.getElementById('sitemapUrl').value;
+            const submitBtn = document.getElementById('submitBtn');
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const progressText = document.getElementById('progressText');
+            const results = document.getElementById('results');
+            const resultsBody = document.getElementById('resultsBody');
+            const resultsHeader = document.getElementById('resultsHeader');
+            
+            // Reset UI
+            error.style.display = 'none';
+            results.style.display = 'none';
+            loading.style.display = 'block';
+            stopBtn.style.display = 'block';
+            submitBtn.disabled = true;
+            resultsBody.innerHTML = '';
+            progressText.textContent = '';
+            urlCounter = 0; // Reset URL counter
+            
+            // Create request ID
+            currentRequestId = Date.now().toString();
+            
+            // Show results table immediately
+            results.style.display = 'block';
+            resultsHeader.textContent = 'Processing...';
+            
+            // Start the request
+            try {
+                const response = await fetch('/check', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ url: url, request_id: currentRequestId })
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Request failed');
+                }
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                
+                // Store reader for cancellation
+                eventSource = { close: () => reader.cancel() };
+                
+                try {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        
+                        if (done) {
+                            break;
+                        }
+                        
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() || ''; // Keep incomplete line in buffer
+                        
+                        for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.substring(6));
+                                handleStreamMessage(data, resultsHeader, progressText, error);
+                            } catch (e) {
+                                // Skip invalid JSON
+                            }
+                        }
+                    }
+                }
+                
+                // Process any remaining buffer
+                if (buffer.startsWith('data: ')) {
+                    try {
+                        const data = JSON.parse(buffer.substring(6));
+                        handleStreamMessage(data, resultsHeader, progressText, error);
+                        } catch (e) {
+                            // Skip invalid JSON
+                        }
+                    }
+                } catch (streamError) {
+                    if (streamError.name !== 'AbortError') {
+                        throw streamError;
+                    }
+                    // AbortError is expected when user cancels
+                }
+                
+            } catch (err) {
+                if (err.name === 'AbortError' || err.message.includes('cancel')) {
+                    // User cancelled, already handled
+                    return;
+                }
+                error.textContent = `Error: ${err.message}`;
+                error.style.display = 'block';
+                handleStop();
+            }
+        });
+        
+        function handleStreamMessage(data, resultsHeader, progressText, error) {
+            switch(data.type) {
+                case 'start':
+                    totalUrls = data.total;
+                    resultsHeader.textContent = `Found ${totalUrls} URLs:`;
+                    break;
+                    
+                case 'result':
+                    addResultRow(data.url, data.status);
+                    if (data.completed && data.total) {
+                        progressText.textContent = `Progress: ${data.completed} / ${data.total} URLs checked`;
+                    }
+                    break;
+                    
+                case 'complete':
+                    const submitBtn = document.getElementById('submitBtn');
+                    const loading = document.getElementById('loading');
+                    const stopBtn = document.getElementById('stopBtn');
+                    const progressText = document.getElementById('progressText');
+                    
+                    loading.style.display = 'none';
+                    stopBtn.style.display = 'none';
+                    submitBtn.disabled = false;
+                    progressText.textContent = '';
+                    
+                    let headerText = `Found ${data.total} URLs`;
+                    if (data.cancelled) {
+                        headerText += ' (cancelled)';
+                    }
+                    resultsHeader.textContent = headerText + ':';
+                    
+                    eventSource = null;
+                    currentRequestId = null;
+                    break;
+                    
+                case 'cancelled':
+                    // Already handled in handleStop
+                    break;
+                    
+                case 'error':
+                    error.textContent = `Error: ${data.message}`;
+                    error.style.display = 'block';
+                    handleStop();
+                    break;
+            }
+        }
+    </script>
+</body>
+</html>
