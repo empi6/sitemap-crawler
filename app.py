@@ -40,26 +40,13 @@ def index():
 def check_sitemap():
     sitemap_url = request.json.get('url')
     request_id = request.json.get('request_id', str(time.time()))
-    client_side = request.json.get('client_side', False)
     
     if not sitemap_url:
         return jsonify({'error': 'URL is required'}), 400
     
-    # If client-side mode, just return the URLs list
-    if client_side:
-        try:
-            urls = fetch_sitemap_urls(sitemap_url)
-            return jsonify({
-                'urls': urls,
-                'total': len(urls),
-                'request_id': request_id
-            })
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
-    
     def generate():
         try:
-            urls = fetch_sitemap_urls(sitemap_url)
+    urls = fetch_sitemap_urls(sitemap_url)
             cancelled = threading.Event()
             
             # Store cancellation event
@@ -70,11 +57,11 @@ def check_sitemap():
             yield f"data: {json.dumps({'type': 'start', 'total': len(urls)})}\n\n"
             
             completed_count = 0
-            
-            # Run fast parallel requests
-            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                future_to_url = {executor.submit(check_url_status, url): url for url in urls}
-                
+
+    # Run fast parallel requests
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_url = {executor.submit(check_url_status, url): url for url in urls}
+        
                 for future in as_completed(future_to_url):
                     # Check for cancellation
                     if cancelled.is_set():
@@ -95,7 +82,7 @@ def check_sitemap():
                     for f in future_to_url:
                         if not f.done():
                             f.cancel()
-                    
+
                     # Send remaining URLs that weren't completed
                     for future, url in future_to_url.items():
                         if not future.done():
