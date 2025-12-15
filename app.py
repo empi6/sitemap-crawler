@@ -40,9 +40,22 @@ def index():
 def check_sitemap():
     sitemap_url = request.json.get('url')
     request_id = request.json.get('request_id', str(time.time()))
+    client_side = request.json.get('client_side', False)
     
     if not sitemap_url:
         return jsonify({'error': 'URL is required'}), 400
+    
+    # If client-side mode, just return the URLs list
+    if client_side:
+        try:
+            urls = fetch_sitemap_urls(sitemap_url)
+            return jsonify({
+                'urls': urls,
+                'total': len(urls),
+                'request_id': request_id
+            })
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
     
     def generate():
         try:

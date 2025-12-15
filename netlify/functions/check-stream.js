@@ -102,7 +102,7 @@ exports.handler = async (event, context) => {
   try {
     if (event.httpMethod === 'POST') {
       // Start crawl
-      const { url: sitemapUrl, request_id } = JSON.parse(event.body);
+      const { url: sitemapUrl, request_id, client_side } = JSON.parse(event.body);
       
       if (!sitemapUrl) {
         return {
@@ -116,6 +116,19 @@ exports.handler = async (event, context) => {
       
       // Fetch URLs from sitemap
       const urls = await fetchSitemapUrls(sitemapUrl);
+      
+      // If client-side mode, just return the URLs list
+      if (client_side) {
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({
+            urls: urls,
+            total: urls.length,
+            request_id: requestId,
+          }),
+        };
+      }
       
       // Start processing asynchronously (don't await)
       processUrlsAsync(urls, requestId).catch(() => {

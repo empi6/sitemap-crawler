@@ -217,6 +217,16 @@
                     required
                 >
             </div>
+            <div class="form-group" style="margin-bottom: 15px;">
+                <label style="display: flex; align-items: center; cursor: pointer;">
+                    <input 
+                        type="checkbox" 
+                        id="useLocalNetwork" 
+                        style="margin-right: 8px; width: auto; cursor: pointer;"
+                    >
+                    <span>Check URLs from my local network (uses your IP address instead of server)</span>
+                </label>
+            </div>
             <div class="button-group">
                 <button type="submit" id="submitBtn">Check Sitemap</button>
                 <button type="button" id="stopBtn" class="stop-btn" style="display: none;">Stop</button>
@@ -253,6 +263,77 @@
         let currentRequestId = null;
         let totalUrls = 0;
         let urlCounter = 0;
+        let isCancelled = false;
+        let clientSideProcessing = null;
+        
+        // Client-side URL checking function
+        async function checkUrlFromClient(url) {
+            try {
+                // Try HEAD first (lighter request)
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000);
+                
+                const response = await fetch(url, {
+                    method: 'HEAD',
+                    signal: controller.signal,
+                    mode: 'cors', // Try CORS first to get status
+                });
+                
+                clearTimeout(timeoutId);
+                return { url, status: response.status };
+            } catch (error) {
+                // If HEAD fails or CORS blocks, try GET
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 10000);
+                    
+                    const response = await fetch(url, {
+                        method: 'GET',
+                        signal: controller.signal,
+                        mode: 'cors',
+                    });
+                    
+                    clearTimeout(timeoutId);
+                    return { url, status: response.status };
+                } catch (err) {
+                    // If CORS blocks, we can't get status, mark as checked but unknown
+                    // This happens when checking cross-origin URLs
+                    return { url, status: 'CORS_BLOCKED' };
+                }
+            }
+        }
+        
+        // Process URLs on client side
+        async function processUrlsClientSide(urls, onProgress, onComplete) {
+            const results = [];
+            const batchSize = 5; // Process 5 at a time to avoid overwhelming browser
+            
+            for (let i = 0; i < urls.length; i += batchSize) {
+                if (isCancelled) {
+                    break;
+                }
+                
+                const batch = urls.slice(i, i + batchSize);
+                const batchPromises = batch.map(url => checkUrlFromClient(url));
+                const batchResults = await Promise.all(batchPromises);
+                
+                results.push(...batchResults);
+                
+                // Update progress and display results
+                if (onProgress) {
+                    onProgress(results.length, urls.length, batchResults);
+                }
+                
+                // Small delay to avoid rate limiting
+                await new Promise(resolve => setTimeout(resolve, 200));
+            }
+            
+            if (onComplete) {
+                onComplete(results);
+            }
+            
+            return results;
+        }
         
         function addResultRow(url, status) {
             const resultsBody = document.getElementById('resultsBody');
@@ -274,16 +355,19 @@
             const statusSpan = document.createElement('span');
             statusSpan.className = 'status-code';
             
-            if (status === 'ERROR') {
-                statusSpan.className += ' status-error';
-                statusSpan.textContent = 'ERROR';
-            } else if (status === 'TIMEOUT') {
-                statusSpan.className += ' status-timeout';
-                statusSpan.textContent = 'TIMEOUT';
-            } else if (status === 'CANCELLED') {
-                statusSpan.className += ' status-cancelled';
-                statusSpan.textContent = 'CANCELLED';
-            } else if (status >= 200 && status < 300) {
+                    if (status === 'ERROR') {
+                        statusSpan.className += ' status-error';
+                        statusSpan.textContent = 'ERROR';
+                    } else if (status === 'CORS_BLOCKED') {
+                        statusSpan.className += ' status-error';
+                        statusSpan.textContent = 'CORS';
+                    } else if (status === 'TIMEOUT') {
+                        statusSpan.className += ' status-timeout';
+                        statusSpan.textContent = 'TIMEOUT';
+                    } else if (status === 'CANCELLED') {
+                        statusSpan.className += ' status-cancelled';
+                        statusSpan.textContent = 'CANCELLED';
+                    } else if (typeof status === 'number' && status >= 200 && status < 300) {
                 statusSpan.className += ' status-200';
                 statusSpan.textContent = status;
             } else if (status >= 300 && status < 400) {
@@ -328,6 +412,13 @@
         });
         
         function handleStop() {
+            isCancelled = true;
+            
+            // Stop client-side processing if active
+            if (clientSideProcessing) {
+                clientSideProcessing = null;
+            }
+            
             const submitBtn = document.getElementById('submitBtn');
             const loading = document.getElementById('loading');
             const error = document.getElementById('error');
@@ -367,6 +458,10 @@
             resultsBody.innerHTML = '';
             progressText.textContent = '';
             urlCounter = 0; // Reset URL counter
+            isCancelled = false;
+            
+            // Check if using local network
+            const useLocalNetwork = document.getElementById('useLocalNetwork').checked;
             
             // Create request ID
             currentRequestId = Date.now().toString();
@@ -377,6 +472,77 @@
             
             // Start the request
             try {
+                if (useLocalNetwork) {
+                    // Client-side checking mode
+                    // First, fetch the sitemap URLs from server
+                    // Detect if running on Netlify or Flask
+                    const isNetlify = window.location.hostname.includes('netlify.app') || window.location.pathname.includes('.netlify');
+                    const apiUrl = isNetlify ? '/.netlify/functions/check-stream' : '/check';
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ url: url, request_id: currentRequestId, client_side: true })
+                    });
+                    
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.error || 'Request failed');
+                    }
+                    
+                    const data = await response.json();
+                    const urls = data.urls || [];
+                    
+                    if (urls.length === 0) {
+                        throw new Error('No URLs found in sitemap');
+                    }
+                    
+                    // Handle initial start message
+                    handleStreamMessage({ type: 'start', total: urls.length }, resultsHeader, progressText, error);
+                    
+                    // Store cancellation handler
+                    eventSource = {
+                        close: () => {
+                            isCancelled = true;
+                            clientSideProcessing = null;
+                        }
+                    };
+                    
+                    // Process URLs on client side
+                    clientSideProcessing = processUrlsClientSide(
+                        urls,
+                        (completed, total, batchResults) => {
+                            // Display batch results
+                            batchResults.forEach(result => {
+                                addResultRow(result.url, result.status);
+                            });
+                            progressText.textContent = `Progress: ${completed} / ${total} URLs checked (from your network)`;
+                        },
+                        (results) => {
+                            // Complete
+                            const submitBtn = document.getElementById('submitBtn');
+                            const loading = document.getElementById('loading');
+                            const stopBtn = document.getElementById('stopBtn');
+                            const progressText = document.getElementById('progressText');
+                            
+                            loading.style.display = 'none';
+                            stopBtn.style.display = 'none';
+                            submitBtn.disabled = false;
+                            progressText.textContent = '';
+                            
+                            resultsHeader.textContent = `Found ${results.length} URLs (checked from your network):`;
+                            
+                            eventSource = null;
+                            currentRequestId = null;
+                            clientSideProcessing = null;
+                        }
+                    );
+                    
+                    return; // Exit early for client-side mode
+                }
+                
+                // Server-side checking mode (original)
                 // Use Netlify Function endpoint
                 const apiUrl = '/.netlify/functions/check-stream';
                 const response = await fetch(apiUrl, {
