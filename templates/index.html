@@ -274,18 +274,18 @@
             const statusSpan = document.createElement('span');
             statusSpan.className = 'status-code';
             
-                    if (status === 'ERROR') {
-                        statusSpan.className += ' status-error';
-                        statusSpan.textContent = 'ERROR';
+            if (status === 'ERROR') {
+                statusSpan.className += ' status-error';
+                statusSpan.textContent = 'ERROR';
                     } else if (status === 'CORS_BLOCKED') {
                         statusSpan.className += ' status-error';
                         statusSpan.textContent = 'CORS';
-                    } else if (status === 'TIMEOUT') {
-                        statusSpan.className += ' status-timeout';
-                        statusSpan.textContent = 'TIMEOUT';
-                    } else if (status === 'CANCELLED') {
-                        statusSpan.className += ' status-cancelled';
-                        statusSpan.textContent = 'CANCELLED';
+            } else if (status === 'TIMEOUT') {
+                statusSpan.className += ' status-timeout';
+                statusSpan.textContent = 'TIMEOUT';
+            } else if (status === 'CANCELLED') {
+                statusSpan.className += ' status-cancelled';
+                statusSpan.textContent = 'CANCELLED';
                     } else if (typeof status === 'number' && status >= 200 && status < 300) {
                 statusSpan.className += ' status-200';
                 statusSpan.textContent = status;
@@ -349,8 +349,17 @@
             urlCounter = 0;
         }
         
-        document.getElementById('sitemapForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
+        // Wait for DOM to be ready
+        document.addEventListener('DOMContentLoaded', function() {
+            const form = document.getElementById('sitemapForm');
+            if (!form) {
+                console.error('Form not found!');
+                return;
+            }
+            
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
             
             const url = document.getElementById('sitemapUrl').value;
             const submitBtn = document.getElementById('submitBtn');
@@ -380,9 +389,20 @@
             
             // Start the request
             try {
-                // Use Netlify Function endpoint
-                const apiUrl = '/.netlify/functions/check-stream';
-                const response = await fetch(apiUrl, {
+                // Detect if running on Netlify or Flask
+                // Check for Netlify by hostname or if we're accessing Netlify functions
+                const isNetlify = window.location.hostname.includes('netlify.app') || 
+                                 window.location.hostname.includes('netlify.com') ||
+                                 window.location.pathname.includes('.netlify') ||
+                                 window.location.hostname === 'localhost' && window.location.port === '8888'; // Netlify Dev
+                const apiUrl = isNetlify ? '/.netlify/functions/check-stream' : '/check';
+                const cancelUrl = isNetlify ? '/.netlify/functions/cancel' : '/cancel';
+                
+                console.log('Using endpoint:', apiUrl, 'isNetlify:', isNetlify, 'hostname:', window.location.hostname);
+                
+                if (isNetlify) {
+                    // Netlify: Use polling
+                    const response = await fetch(apiUrl, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -394,81 +414,172 @@
                     const errorData = await response.json();
                     throw new Error(errorData.error || 'Request failed');
                 }
-                
-                const startData = await response.json();
-                currentRequestId = startData.request_id;
-                
-                // Handle initial start message
-                handleStreamMessage({ type: 'start', total: startData.total }, resultsHeader, progressText, error);
-                
-                // Store polling interval for cancellation
-                let pollInterval = null;
-                
-                eventSource = {
-                    close: () => {
-                        if (pollInterval) {
-                            clearInterval(pollInterval);
-                            pollInterval = null;
+                    
+                    const startData = await response.json();
+                    currentRequestId = startData.request_id;
+                    
+                    // Handle initial start message
+                    handleStreamMessage({ type: 'start', total: startData.total }, resultsHeader, progressText, error);
+                    
+                    // Store polling interval for cancellation
+                    let pollInterval = null;
+                    
+                    eventSource = {
+                        close: () => {
+                            if (pollInterval) {
+                                clearInterval(pollInterval);
+                                pollInterval = null;
+                            }
+                            // Cancel on server
+                            fetch(cancelUrl, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ request_id: currentRequestId })
+                            }).catch(() => {});
                         }
-                        // Cancel on server
-                        fetch('/.netlify/functions/cancel', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ request_id: currentRequestId })
-                        }).catch(() => {});
-                    }
-                };
-                
-                // Poll for updates
-                pollInterval = setInterval(async () => {
-                    try {
-                        const progressResponse = await fetch(`${apiUrl}?request_id=${currentRequestId}`);
-                        if (!progressResponse.ok) {
-                            clearInterval(pollInterval);
-                            return;
-                        }
-                        
-                        const progressData = await progressResponse.json();
-                        
-                        // Update results
-                        const currentRowCount = resultsBody.children.length;
-                        if (progressData.results && progressData.results.length > currentRowCount) {
-                            // Add new results
-                            for (let i = currentRowCount; i < progressData.results.length; i++) {
-                                const result = progressData.results[i];
-                                addResultRow(result.url, result.status);
+                    };
+                    
+                    // Poll for updates
+                    pollInterval = setInterval(async () => {
+                        try {
+                            const progressResponse = await fetch(`${apiUrl}?request_id=${currentRequestId}`);
+                            if (!progressResponse.ok) {
+                                clearInterval(pollInterval);
+                                return;
                             }
                             
-                            // Update progress
-                            if (progressData.completed && progressData.total) {
-                                progressText.textContent = `Progress: ${progressData.completed} / ${progressData.total} URLs checked`;
+                            const progressData = await progressResponse.json();
+                            
+                            // Update results
+                            const currentRowCount = resultsBody.children.length;
+                            if (progressData.results && progressData.results.length > currentRowCount) {
+                                // Add new results
+                                for (let i = currentRowCount; i < progressData.results.length; i++) {
+                                    const result = progressData.results[i];
+                                    addResultRow(result.url, result.status);
+                                }
+                                
+                                // Update progress
+                                if (progressData.completed && progressData.total) {
+                                    progressText.textContent = `Progress: ${progressData.completed} / ${progressData.total} URLs checked`;
+                                }
                             }
+                            
+                            // Check if complete
+                            if (progressData.status === 'complete' || progressData.status === 'cancelled' || progressData.status === 'error') {
+                                clearInterval(pollInterval);
+                                handleStreamMessage({
+                                    type: 'complete',
+                                    total: progressData.results?.length || 0,
+                                    cancelled: progressData.status === 'cancelled'
+                                }, resultsHeader, progressText, error);
+                            }
+                        } catch (pollError) {
+                            console.error('Polling error:', pollError);
+                        }
+                    }, 500); // Poll every 500ms
+                } else {
+                    // Flask: Use SSE streaming
+                    console.log('Starting Flask SSE request to:', apiUrl);
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ url: url, request_id: currentRequestId })
+                    });
+                    
+                    console.log('Response status:', response.status, response.ok);
+                    
+                    if (!response.ok) {
+                        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+                        console.error('Request failed:', errorData);
+                        throw new Error(errorData.error || 'Request failed');
+                    }
+                    
+                    if (!response.body) {
+                        console.error('No response body');
+                        throw new Error('No response body received');
+                }
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                    
+                    console.log('Starting to read stream...');
+                
+                // Store reader for cancellation
+                    eventSource = {
+                        close: () => {
+                            console.log('Cancelling stream');
+                            reader.cancel();
+                            // Cancel on server
+                            fetch(cancelUrl, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ request_id: currentRequestId })
+                            }).catch(() => {});
+                        }
+                    };
+                
+                try {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        
+                        if (done) {
+                                console.log('Stream done');
+                            break;
                         }
                         
-                        // Check if complete
-                        if (progressData.status === 'complete' || progressData.status === 'cancelled' || progressData.status === 'error') {
-                            clearInterval(pollInterval);
-                            handleStreamMessage({
-                                type: 'complete',
-                                total: progressData.results?.length || 0,
-                                cancelled: progressData.status === 'cancelled'
-                            }, resultsHeader, progressText, error);
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() || ''; // Keep incomplete line in buffer
+                        
+                        for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.substring(6));
+                                        console.log('Received message:', data.type);
+                                handleStreamMessage(data, resultsHeader, progressText, error);
+                            } catch (e) {
+                                        console.error('Failed to parse message:', line, e);
+                            }
                         }
-                    } catch (pollError) {
-                        console.error('Polling error:', pollError);
                     }
-                }, 500); // Poll every 500ms
+                }
+                
+                // Process any remaining buffer
+                if (buffer.startsWith('data: ')) {
+                    try {
+                        const data = JSON.parse(buffer.substring(6));
+                        handleStreamMessage(data, resultsHeader, progressText, error);
+                        } catch (e) {
+                                console.error('Failed to parse remaining buffer:', e);
+                        }
+                    }
+                } catch (streamError) {
+                        console.error('Stream error:', streamError);
+                    if (streamError.name !== 'AbortError') {
+                        throw streamError;
+                    }
+                    // AbortError is expected when user cancels
+                    }
+                }
                 
             } catch (err) {
+                console.error('Request error:', err);
                 if (err.name === 'AbortError' || err.message.includes('cancel')) {
                     // User cancelled, already handled
                     return;
                 }
                 error.textContent = `Error: ${err.message}`;
                 error.style.display = 'block';
-                handleStop();
+                loading.style.display = 'none';
+                stopBtn.style.display = 'none';
+                submitBtn.disabled = false;
             }
-        });
+            }); // Close form submit handler
+        }); // Close DOMContentLoaded
         
         function handleStreamMessage(data, resultsHeader, progressText, error) {
             switch(data.type) {
@@ -485,15 +596,15 @@
                     break;
                     
                 case 'complete':
-                    const submitBtn = document.getElementById('submitBtn');
-                    const loading = document.getElementById('loading');
-                    const stopBtn = document.getElementById('stopBtn');
-                    const progressText = document.getElementById('progressText');
+                    const submitBtnComplete = document.getElementById('submitBtn');
+                    const loadingComplete = document.getElementById('loading');
+                    const stopBtnComplete = document.getElementById('stopBtn');
+                    const progressTextComplete = document.getElementById('progressText');
                     
-                    loading.style.display = 'none';
-                    stopBtn.style.display = 'none';
-                    submitBtn.disabled = false;
-                    progressText.textContent = '';
+                    loadingComplete.style.display = 'none';
+                    stopBtnComplete.style.display = 'none';
+                    submitBtnComplete.disabled = false;
+                    progressTextComplete.textContent = '';
                     
                     let headerText = `Found ${data.total} URLs`;
                     if (data.cancelled) {
@@ -510,9 +621,21 @@
                     break;
                     
                 case 'error':
+                    const submitBtnError = document.getElementById('submitBtn');
+                    const loadingError = document.getElementById('loading');
+                    const stopBtnError = document.getElementById('stopBtn');
+                    const progressTextError = document.getElementById('progressText');
+                    
+                    loadingError.style.display = 'none';
+                    stopBtnError.style.display = 'none';
+                    submitBtnError.disabled = false;
+                    progressTextError.textContent = '';
+                    
                     error.textContent = `Error: ${data.message}`;
                     error.style.display = 'block';
-                    handleStop();
+                    
+                    eventSource = null;
+                    currentRequestId = null;
                     break;
             }
         }

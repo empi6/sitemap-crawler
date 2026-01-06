@@ -14,13 +14,28 @@ active_executors = {}
 executor_lock = threading.Lock()
 
 def fetch_sitemap_urls(sitemap_url):
-    response = requests.get(sitemap_url)
-    response.raise_for_status()
+    try:
+        response = requests.get(sitemap_url, timeout=30)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"Failed to fetch sitemap: {str(e)}")
 
-    root = ET.fromstring(response.text)
+    try:
+        root = ET.fromstring(response.text)
+    except ET.ParseError as e:
+        raise Exception(f"Failed to parse sitemap XML: {str(e)}")
+    
     namespace = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-
-    return [loc.text.strip() for loc in root.findall(".//ns:loc", namespace)]
+    urls = [loc.text.strip() for loc in root.findall(".//ns:loc", namespace)]
+    
+    if not urls:
+        # Try without namespace in case sitemap doesn't use standard namespace
+        urls = [loc.text.strip() for loc in root.findall(".//loc")]
+    
+    if not urls:
+        raise Exception("No URLs found in sitemap. Make sure the sitemap contains <loc> tags.")
+    
+    return urls
 
 
 def check_url_status(url):
@@ -46,7 +61,7 @@ def check_sitemap():
     
     def generate():
         try:
-    urls = fetch_sitemap_urls(sitemap_url)
+            urls = fetch_sitemap_urls(sitemap_url)
             cancelled = threading.Event()
             
             # Store cancellation event
@@ -57,11 +72,11 @@ def check_sitemap():
             yield f"data: {json.dumps({'type': 'start', 'total': len(urls)})}\n\n"
             
             completed_count = 0
-
-    # Run fast parallel requests
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_to_url = {executor.submit(check_url_status, url): url for url in urls}
-        
+            
+            # Run fast parallel requests
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                future_to_url = {executor.submit(check_url_status, url): url for url in urls}
+                
                 for future in as_completed(future_to_url):
                     # Check for cancellation
                     if cancelled.is_set():
@@ -82,7 +97,7 @@ def check_sitemap():
                     for f in future_to_url:
                         if not f.done():
                             f.cancel()
-
+                    
                     # Send remaining URLs that weren't completed
                     for future, url in future_to_url.items():
                         if not future.done():
@@ -99,7 +114,11 @@ def check_sitemap():
             with executor_lock:
                 active_executors.pop(request_id, None)
     
-    return Response(generate(), mimetype='text/event-stream')
+    response = Response(generate(), mimetype='text/event-stream')
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['X-Accel-Buffering'] = 'no'
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
 
 
 @app.route('/cancel', methods=['POST'])

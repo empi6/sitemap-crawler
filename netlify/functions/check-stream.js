@@ -12,23 +12,57 @@ function fetchSitemapUrls(sitemapUrl) {
     const url = new URL(sitemapUrl);
     const client = url.protocol === 'https:' ? https : http;
     
-    client.get(sitemapUrl, (res) => {
+    const req = client.get(sitemapUrl, { timeout: 30000 }, (res) => {
+      // Handle redirects
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return fetchSitemapUrls(res.headers.location).then(resolve).catch(reject);
+      }
+      
+      if (res.statusCode !== 200) {
+        return reject(new Error(`Failed to fetch sitemap: HTTP ${res.statusCode}`));
+      }
+      
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
         try {
           const urls = [];
-          const regex = /<loc>(.*?)<\/loc>/g;
+          // Try with namespace first
+          const namespaceRegex = /<loc[^>]*>(.*?)<\/loc>/g;
           let match;
-          while ((match = regex.exec(data)) !== null) {
+          while ((match = namespaceRegex.exec(data)) !== null) {
             urls.push(match[1].trim());
           }
+          
+          // If no URLs found, try without namespace
+          if (urls.length === 0) {
+            const simpleRegex = /<loc>(.*?)<\/loc>/g;
+            while ((match = simpleRegex.exec(data)) !== null) {
+              urls.push(match[1].trim());
+            }
+          }
+          
+          if (urls.length === 0) {
+            return reject(new Error('No URLs found in sitemap. Make sure the sitemap contains <loc> tags.'));
+          }
+          
           resolve(urls);
         } catch (error) {
-          reject(error);
+          reject(new Error(`Failed to parse sitemap XML: ${error.message}`));
         }
       });
-    }).on('error', reject);
+    });
+    
+    req.on('error', (err) => {
+      reject(new Error(`Failed to fetch sitemap: ${err.message}`));
+    });
+    
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Request timeout while fetching sitemap'));
+    });
+    
+    req.setTimeout(30000);
   });
 }
 
@@ -115,11 +149,23 @@ exports.handler = async (event, context) => {
       const requestId = request_id || Date.now().toString();
       
       // Fetch URLs from sitemap
-      const urls = await fetchSitemapUrls(sitemapUrl);
+      let urls;
+      try {
+        urls = await fetchSitemapUrls(sitemapUrl);
+      } catch (error) {
+        return {
+          statusCode: 500,
+          headers,
+          body: JSON.stringify({ error: error.message }),
+        };
+      }
       
       // Start processing asynchronously (don't await)
-      processUrlsAsync(urls, requestId).catch(() => {
-        crawlProgress[requestId].status = 'error';
+      processUrlsAsync(urls, requestId).catch((err) => {
+        if (crawlProgress[requestId]) {
+          crawlProgress[requestId].status = 'error';
+          crawlProgress[requestId].error = err.message;
+        }
       });
       
       return {
@@ -167,4 +213,5 @@ exports.handler = async (event, context) => {
     };
   }
 };
+
 
